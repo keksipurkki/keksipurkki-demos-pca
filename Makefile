@@ -5,11 +5,14 @@ COMPILER := gfortran $(FLAGS)
 COUNTRY_FLAGS = $(wildcard flags/*.png)
 BITMAPS := $(patsubst flags/%.png, bitmaps/%.bmp, $(COUNTRY_FLAGS))
 
-all: $(PROG) $BITMAPS
-	./svd bitmaps/*
+all: $(PROG) $(BITMAPS)
+	./svd bitmaps/*.bmp
 
-bitmaps/%.bmp:
-	echo $@ $< $^
+bitmaps:
+	mkdir bitmaps
+
+bitmaps/%.bmp: bitmaps
+	convert flags/$*.png -resize 5% $@
 
 $(PROG): $(OBJS)
 	$(COMPILER) -o $@ $^
