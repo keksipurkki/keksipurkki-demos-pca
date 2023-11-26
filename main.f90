@@ -73,6 +73,8 @@ program main
   integer, allocatable, target :: result(:,:)
   integer, pointer :: r(:)
 
+  open(output_unit, encoding='utf-8')
+
   args = cli_arguments()
   rank = 30
   call disp('Args: ', size(args))
@@ -130,6 +132,8 @@ contains
     rank = size(result, 1)
     call assert(rank > 0, 'Expected a non-zero rank')
 
+    call disp(result)
+
     call disp('-------------------------------------------------------------------')
 
     do i = 1, rank
@@ -141,7 +145,7 @@ contains
       endif
 
       do j = 1, size(cluster)
-        write (*, '(AA)', advance='no') country_code(args(cluster(j))), " "
+        write (*, '(AA)', advance='no') country_emoji(country_code(args(cluster(j)))), " "
       enddo
 
       print *, ''
@@ -158,6 +162,18 @@ contains
     start = scan(country_code, '/', back=.false.) + 1
     end = scan(country_code, '.', back=.true.) - 1
     country_code = country_code(start:end)
+  end function
+
+  function country_emoji(code)
+    integer, parameter :: ucs2 = selected_char_kind('ISO_10646')
+    character(len=2), intent(in) :: code
+    character(kind=ucs2, len=:), allocatable :: country_emoji
+    integer :: i
+    integer, parameter :: offset = 127365
+    country_emoji = ''
+     do i=1, len(code)
+       country_emoji = country_emoji // char(ichar(code(i:i)) + offset, kind=ucs2)
+     enddo
   end function
 
   function cosine(a, b)
