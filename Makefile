@@ -5,7 +5,7 @@ COMPILER := gfortran $(FLAGS)
 COUNTRY_FLAGS = $(wildcard flags/*.png)
 BITMAPS := $(patsubst flags/%.png, bitmaps/%.bmp, $(COUNTRY_FLAGS))
 
-all: $(PROG) $(BITMAPS)
+all: $(PROG)
 	./svd bitmaps/*.bmp
 
 bitmaps:

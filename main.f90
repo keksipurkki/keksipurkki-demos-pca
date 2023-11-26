@@ -35,7 +35,7 @@ module image_class
 
     end function
 
-    function matrix_from_commandline_arguments(arguments) result(x)
+    function input(arguments) result(x)
       use, intrinsic :: iso_c_binding
       real(real64), allocatable :: x(:,:)
       character(len=*), intent(in) :: arguments(:)
@@ -65,22 +65,22 @@ module image_class
 end module
 
 program main
-  use svd
   use image_class
   use dispmodule
   use iso_fortran_env
   implicit none
 
-  real(real64), allocatable, target :: x(:,:), orig(:,:)
-  real(real64), allocatable :: s(:), e(:), t(:,:)
+  real(real64), allocatable :: x(:,:), t(:,:)
+  real(real64), pointer :: s(:)
   real(real64), pointer :: u(:,:), v(:,:)
   character(len=32), allocatable :: args(:)
-  integer :: i, j, axis, n, p, info, job, rank
+  integer :: i, j, axis, rank
   integer, allocatable, target :: result(:,:)
   integer, pointer :: r(:)
 
   open(output_unit, encoding='utf-8')
 
+  rank = 30
   args = cli_arguments()
 
   if (size(args) == 0) then
@@ -88,44 +88,34 @@ program main
     stop 0
   endif
 
-  rank = 30
   call disp('Args: ', size(args))
   call disp('Rank: ', rank)
 
   allocate(result(rank, size(args)), source=0)
 
-  orig = matrix_from_commandline_arguments(args)
-  x = matrix_from_commandline_arguments(args)
-  u => x
-  n = size(x, 1)
-  p = size(x, 2)
-
-  job = 10
-  allocate(s(min(n + 1, p)))
-  allocate(e(p))
-
-  call dsvdc(x, n, p, s, e, u, v, job, info)
-  call assert(info == 0, 'Singular value decomposition failed')
+  x = input(args)
+  call dsvd(x, s, u, v)
   call disp('Left singular vectors: ', shape(u))
 
-  t = score_matrix(s, u, rank)
+  t = score(s, u, rank)
 
   do i = 1, size(args)
-    axis = maxloc([( cosine(orig(i,:), t(:,j)), j = 1, rank )], 1)
+    axis = maxloc([( cosine(x(i,:), t(:,j)), j = 1, rank )], 1)
     r => result(axis,:)
     j = findloc(r, 0, 1)
     r(j) = i
   enddo
 
-  call principal_components(args, result)
+  call pca(args, result)
 
 contains
 
-  function score_matrix(sigma, u, rank) result(t)
+  function score(sigma, u, rank) result(t)
     integer, intent(in) :: rank
     real(real64), intent(in) :: u(:,:), sigma(:)
     real(real64), allocatable :: t(:,:)
     integer :: i
+
     allocate(t(size(u, 2), rank), source=0.0d0)
 
     do i = 1, rank
@@ -134,7 +124,7 @@ contains
 
   end function
 
-  subroutine principal_components(args, result)
+  subroutine pca(args, result)
     character(len=32), intent(in) :: args(:)
     integer, intent(in), target :: result(:,:)
     integer :: rank, i, j
@@ -162,6 +152,35 @@ contains
     enddo
 
     call disp('-------------------------------------------------------------------')
+  end subroutine
+
+  subroutine dsvd(x, s, u, v)
+    use svd, only: dsvdc
+    real(real64), intent(in) :: x(:,:)
+    real(real64), intent(out), pointer :: s(:), u(:,:), v(:,:)
+    real(real64), allocatable :: e(:)
+    real(real64), allocatable, target :: xx(:,:)
+    integer :: n, p, job, info
+
+    ! automatic allocation
+    xx = x
+
+    n = size(xx, 1)
+    p = size(xx, 2)
+
+    call assert(n < p, 'Invalid matrix shape: n >= p')
+
+    allocate(s(min(n + 1, p)))
+    allocate(e(p))
+
+    ! compute left singular vectors into `u`
+    job = 10
+    u => xx
+    v => null()
+
+    call dsvdc(xx, n, p, s, e, u, v, job, info)
+    call assert(info == 0, 'Singular value decomposition failed')
+
   end subroutine
 
   function country_code(fname)
