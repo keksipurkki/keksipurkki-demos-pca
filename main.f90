@@ -9,8 +9,6 @@ module image_class
 
   type :: ImageMatrix
     type(Image), allocatable :: images(:)
-  contains
-    procedure :: matrix => matrix
   end type
 
   contains
@@ -54,7 +52,7 @@ module image_class
       enddo
 
       m = ImageMatrix(images)
-      x = m%matrix()
+      x = matrix(m)
 
     end function
 
@@ -68,7 +66,7 @@ program main
   implicit none
 
   real(real64), allocatable, target :: x(:,:), orig(:,:)
-  real(real64), allocatable :: s(:), e(:)
+  real(real64), allocatable :: s(:), e(:), t(:,:)
   real(real64), pointer :: u(:,:), v(:,:)
   character(len=32), allocatable :: args(:)
   integer :: i, j, axis, n, p, info, job, rank
@@ -96,8 +94,10 @@ program main
   call assert(info == 0, 'Singular value decomposition failed')
   call disp('Left singular vectors: ', shape(u))
 
+  t = score_matrix(s, u, rank)
+
   do i = 1, size(args)
-    axis = maxloc([( cosine(orig(i,:), s(j) * u(j,:)), j = 1, rank )], 1)
+    axis = maxloc([( cosine(orig(i,:), t(:,j)), j = 1, rank )], 1)
     r => result(axis,:)
     j = findloc(r, 0, 1)
     r(j) = i
@@ -106,6 +106,19 @@ program main
   call principal_components(args, result)
 
 contains
+
+  function score_matrix(sigma, u, rank) result(t)
+    integer, intent(in) :: rank
+    real(real64), intent(in) :: u(:,:), sigma(:)
+    real(real64), allocatable :: t(:,:)
+    integer :: i
+    allocate(t(size(u, 2), rank), source=0.0d0)
+
+    do i = 1, rank
+      t(:,i) = sigma(i) * u(i,:)
+    enddo
+
+  end function
 
   subroutine principal_components(args, result)
     character(len=32), intent(in) :: args(:)
