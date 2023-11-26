@@ -17,14 +17,20 @@ module image_class
       class(ImageMatrix), intent(in) :: self
       real(real64), allocatable :: matrix(:,:)
       integer :: i, rows, cols
+      integer(int32) :: offset
 
       rows = size(self%images)
-      cols = maxval([( size(self%images(i)%bytes), i = 1, size(self%images) )])
+
+      do i = 1, size(self%images)
+        offset = transfer(self%images(i)%bytes(11:14), 1_int32) + 1
+        cols = max(cols, size(self%images(i)%bytes(offset:)))
+      enddo
 
       allocate(matrix(rows, cols), source=0.0d0)
 
       do i = 1, size(self%images)
-        matrix(i,:) = 1.0d0 * self%images(i)%bytes
+        offset = transfer(self%images(i)%bytes(11:14), 1_int32) + 1
+        matrix(i,:) = 1.0d0 * self%images(i)%bytes(offset:)
       enddo
 
     end function
@@ -76,6 +82,12 @@ program main
   open(output_unit, encoding='utf-8')
 
   args = cli_arguments()
+
+  if (size(args) == 0) then
+    call disp("Expected at least one argument")
+    stop 0
+  endif
+
   rank = 30
   call disp('Args: ', size(args))
   call disp('Rank: ', rank)
@@ -131,8 +143,6 @@ contains
 
     rank = size(result, 1)
     call assert(rank > 0, 'Expected a non-zero rank')
-
-    call disp(result)
 
     call disp('-------------------------------------------------------------------')
 
