@@ -71,8 +71,7 @@ program main
   implicit none
 
   real(real64), allocatable :: x(:,:), t(:,:)
-  real(real64), pointer :: s(:)
-  real(real64), pointer :: u(:,:), v(:,:)
+  real(real64), allocatable :: s(:), u(:,:), v(:,:)
   character(len=32), allocatable :: args(:)
   integer :: i, j, axis, rank
   integer, allocatable, target :: result(:,:)
@@ -99,7 +98,7 @@ program main
 
   t = score(s, u, rank)
 
-  do i = 1, size(args)
+  do i = 1, size(x, 1)
     axis = maxloc([( cosine(x(i,:), t(:,j)), j = 1, rank )], 1)
     r => result(axis,:)
     j = findloc(r, 0, 1)
@@ -116,10 +115,12 @@ contains
     real(real64), allocatable :: t(:,:)
     integer :: i
 
-    allocate(t(size(u, 2), rank), source=0.0d0)
+    call assert(rank <= size(sigma), 'Array shape mismatch')
+
+    allocate(t(size(u,1), rank), source=0.0d0)
 
     do i = 1, rank
-      t(:,i) = sigma(i) * u(i,:)
+      t(:,i) = sigma(i) * u(:,i)
     enddo
 
   end function
@@ -157,9 +158,9 @@ contains
   subroutine dsvd(x, s, u, v)
     use svd, only: dsvdc
     real(real64), intent(in) :: x(:,:)
-    real(real64), intent(out), pointer :: s(:), u(:,:), v(:,:)
+    real(real64), intent(out), allocatable :: s(:), u(:,:), v(:,:)
     real(real64), allocatable :: e(:)
-    real(real64), allocatable, target :: xx(:,:)
+    real(real64), allocatable :: xx(:,:)
     integer :: n, p, job, info
 
     ! automatic allocation
@@ -168,18 +169,15 @@ contains
     n = size(xx, 1)
     p = size(xx, 2)
 
-    call assert(n < p, 'Invalid matrix shape: n >= p')
+    call assert(n < p, 'Expected a matrix with shape n >= p')
 
-    allocate(s(min(n + 1, p)))
-    allocate(e(p))
-
-    ! compute left singular vectors into `u`
-    job = 10
-    u => xx
-    v => null()
+    job = 0
+    allocate(s(min(n + 1, p)), source=0.0d0)
+    allocate(e(p), source=0.d0)
 
     call dsvdc(xx, n, p, s, e, u, v, job, info)
     call assert(info == 0, 'Singular value decomposition failed')
+    u = transpose(xx)
 
   end subroutine
 
@@ -188,26 +186,25 @@ contains
     character(:), allocatable :: country_code
     integer :: start, end
     country_code = trim(fname)
-    start = scan(country_code, '/', back=.false.) + 1
-    end = scan(country_code, '.', back=.true.) - 1
-    country_code = country_code(start:end)
+    start = scan(country_code, '/', back=.false.)
+    end = scan(country_code, '.', back=.true.)
+    country_code = country_code(start + 1:end - 1)
   end function
 
   function country_emoji(code)
-    integer, parameter :: ucs2 = selected_char_kind('ISO_10646')
     character(len=2), intent(in) :: code
-    character(kind=ucs2, len=:), allocatable :: country_emoji
-    integer :: i
+    integer, parameter :: ucs2 = selected_char_kind('ISO_10646')
+    character(kind=ucs2, len=2) :: country_emoji
+    integer, allocatable :: codepoints(:)
     integer, parameter :: offset = 127365
-    country_emoji = ''
-     do i=1, len(code)
-       country_emoji = country_emoji // char(ichar(code(i:i)) + offset, kind=ucs2)
-     enddo
+    codepoints = [( ichar(code(i:i)) + offset, i = 1, len(code) )]
+    country_emoji = transfer(codepoints, country_emoji)
   end function
 
   function cosine(a, b)
     real(real64), intent(in) :: a(:), b(:)
     real(real64) :: cosine
+    call assert(size(a) == size(b), 'Input rank mismatch')
     cosine = sum(a * b) / (norm2(a) * norm2(b))
   end function
 

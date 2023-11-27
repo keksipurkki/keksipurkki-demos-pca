@@ -1,6 +1,6 @@
 OBJS := main.o dsvdc.o dispmodule.o putstrmodule.o
 PROG := svd
-FLAGS := -Wl,-ld_classic
+FLAGS := -Wl,-ld_classic -march=native -mtune=native -O1
 COMPILER := gfortran $(FLAGS)
 COUNTRY_FLAGS = $(wildcard flags/*.png)
 BITMAPS := $(patsubst flags/%.png, bitmaps/%.bmp, $(COUNTRY_FLAGS))
