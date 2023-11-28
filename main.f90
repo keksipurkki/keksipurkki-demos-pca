@@ -19,18 +19,18 @@ module image_class
       integer :: i, rows, cols
       integer(int32) :: offset
 
-      rows = size(self%images)
+      cols = size(self%images)
 
       do i = 1, size(self%images)
         offset = transfer(self%images(i)%bytes(11:14), 1_int32) + 1
-        cols = max(cols, size(self%images(i)%bytes(offset:)))
+        rows = max(rows, size(self%images(i)%bytes(offset:)))
       enddo
 
       allocate(matrix(rows, cols), source=0.0d0)
 
       do i = 1, size(self%images)
         offset = transfer(self%images(i)%bytes(11:14), 1_int32) + 1
-        matrix(i,:) = 1.0d0 * self%images(i)%bytes(offset:)
+        matrix(:,i) = 1.0d0 * self%images(i)%bytes(offset:)
       enddo
 
     end function
@@ -98,8 +98,8 @@ program main
 
   t = score(s, u, rank)
 
-  do i = 1, size(x, 1)
-    axis = maxloc([( cosine(x(i,:), t(:,j)), j = 1, rank )], 1)
+  do i = 1, size(args)
+    axis = maxloc([( cosine(x(:,i), t(:,j)), j = 1, rank )], 1)
     r => result(axis,:)
     j = findloc(r, 0, 1)
     r(j) = i
@@ -169,15 +169,16 @@ contains
     n = size(xx, 1)
     p = size(xx, 2)
 
-    call assert(n < p, 'Expected a matrix with shape n >= p')
+    call assert(n >= p, 'Expected a matrix with shape n >= p')
 
-    job = 0
+    job = 20
     allocate(s(min(n + 1, p)), source=0.0d0)
     allocate(e(p), source=0.d0)
+    allocate(u(n, p), source=0.0d0)
 
     call dsvdc(xx, n, p, s, e, u, v, job, info)
     call assert(info == 0, 'Singular value decomposition failed')
-    u = transpose(xx)
+    call assert(all(e < epsilon(1.0_real64)), 'Singular value decomposition failed')
 
   end subroutine
 
