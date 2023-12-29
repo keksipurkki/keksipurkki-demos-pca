@@ -26,23 +26,23 @@ module image_class
     end subroutine
 
     !!
-    !! Output shape: x(number_of_bytes, data_points)
+    !! Output shape: x(samples, image_bytes)
     !!
     function matrix(self)
       class(ImageMatrix), intent(in) :: self
       real(real64), allocatable :: matrix(:,:)
       integer :: i, rows, cols
 
-      cols = size(self%images)
+      rows = size(self%images)
 
-      do i = 1, size(self%images)
-        rows = max(rows, size(self%images(i)%bytes))
+      do i = 1, rows
+        cols = max(cols, size(self%images(i)%bytes))
       enddo
 
       allocate(matrix(rows, cols), source=0.0d0)
 
-      do i = 1, size(self%images)
-        matrix(:,i) = 1.0d0 * self%images(i)%bytes
+      do i = 1, rows
+        matrix(i,:) = 1.0d0 * self%images(i)%bytes
       enddo
 
     end function
@@ -74,20 +74,20 @@ module image_class
         offset = transfer(buffer(11:14), 1_int32) + 1
         buffer = buffer(offset:)
 
+        ! Sanity check
+        call assert(mod(size(buffer), 4) == 0, 'Array size mismatch')
+
+        rgba = reshape(ichar(buffer), [4, size(buffer)/4])
+        rgb => rgba(1:3,:)
+        alpha => rgba(4,:)
+
+        ! Sanity check
+        call assert(all(alpha == 255), 'Expected full opacity')
+
         if (grayscale) then
-          ! Sanity check
-          call assert(mod(size(buffer), 4) == 0, 'Array size mismatch')
-
-          rgba = reshape(ichar(buffer), [4, size(buffer)/4])
-          rgb => rgba(1:3,:)
-          alpha => rgba(4,:)
-
-          ! Sanity check
-          call assert(all(alpha == 255), 'Expected full opacity')
           images(i) = image(file_name=arguments(i), bytes=sum(rgb, 1)/3)
-
         else
-          images(i) = image(file_name=arguments(i), bytes=ichar(buffer))
+          images(i) = image(file_name=arguments(i), bytes=reshape(rgb, [size(rgb)]))
         end if
 
         deallocate(buffer)
@@ -96,12 +96,13 @@ module image_class
       m = ImageMatrix(images)
       x = matrix(m)
 
+      ! Column-wise zero mean
       if (mean_substraction) then
-        mean = sum(x, 2) / size(x, 2)
+        mean = sum(x, 1) / size(x, 1)
         call disp('Mean vector size: ', size(mean))
 
         do i = 1, size(arguments)
-          x(:,i) = x(:,i) - mean
+          x(i,:) = x(i,:) - mean
         enddo
       endif
 
@@ -135,17 +136,17 @@ program main
   call disp('-------------------------------------------------------------------')
 
   call disp('RGB')
-  call output('rgb.txt', args, pca(input(args, grayscale=.false.), rank, n))
+  call output('rgb.txt', args, pca(input(args, grayscale=.false.), n), rank)
 
-  !call disp('Grayscale')
-  !call output(args, pca(input(args, grayscale=.true.), rank, n))
+  call disp('Grayscale')
+  call output('grayscale.txt', args, pca(input(args, grayscale=.true.), n), rank)
 
 contains
 
-  function pca(x, rank, data_points) result(result)
+  function pca(x, data_points) result(result)
 
     real(real64), allocatable, intent(in) :: x(:,:)
-    integer, intent(in) :: rank, data_points
+    integer, intent(in) :: data_points
 
     real(real64), allocatable :: t(:,:)
     real(real64), allocatable :: s(:), u(:,:), v(:,:)
@@ -154,53 +155,50 @@ contains
 
     real(real64), allocatable, target :: result(:,:)
 
-    allocate(result(data_points, rank), source=0d0)
-
     call dsvd(x, s, u, v)
     call disp('Left singular vectors: ', shape(u))
     call disp('Singular values: ')
     call disp(s)
 
-    t = pca_score(s, u, rank)
+    t = pca_score(s, u)
     result = matmul(t, x)
+
+    call disp('Result shape: ', shape(result))
 
   end function
 
-  function pca_score(sigma, u, rank) result(t)
-    integer, intent(in) :: rank
+  function pca_score(sigma, u) result(t)
     real(real64), intent(in) :: u(:,:), sigma(:)
     real(real64), allocatable :: t(:,:)
     integer :: i
 
-    call assert(rank <= size(sigma), 'Array shape mismatch')
-
-    allocate(t(rank, size(u,1)), source=0.0d0)
+    allocate(t(size(u,1), size(u, 2)), source=0.0d0)
 
     do i = 1, rank
-      t(i,:) = sigma(i) * u(:,i)
+      t(:,i) = u(:,i) * sigma(i)
     enddo
 
   end function
 
-  subroutine output(fname, args, result)
+  subroutine output(fname, args, result, rank)
     character(len=*), intent(in) :: fname
     character(len=32), intent(in) :: args(:)
+    integer, intent(in) :: rank
     real(real64), intent(in), target :: result(:,:)
-    integer :: rank, i, j
+    integer :: i, j
     integer, allocatable :: cluster(:)
     real(real64), pointer :: r(:)
 
     integer :: io
 
-    rank = size(result, 2)
     call assert(rank > 0, 'Expected a non-zero rank')
 
     open(newunit=io, file=fname, status="replace", action="write", encoding='utf-8')
 
     do i = 1, size(args)
-      r => result(i, :)
+      write (io, '(AA)', advance='no') country_code(args(i)), ";"
       write (io, '(AA)', advance='no') country_emoji(country_code(args(i))), " ;"
-      write (io, '(*(G0,:";"))', advance='no') nint(r)
+      write (io, '(*(G0,:";"))', advance='no') nint(result(i, 1:rank))
       write (io, '(A)', advance='yes') ''
     enddo
 
@@ -224,16 +222,16 @@ contains
     call disp('SVD shape')
     call disp('n: ', n)
     call disp('p: ', p)
-    call assert(n >= p, 'Expected a matrix with shape n >= p')
+    call assert(n < p, 'Expected a matrix with shape n < p')
 
-    job = 20
+    job = 10
     allocate(s(min(n + 1, p)), source=0.0d0)
     allocate(e(p), source=0.d0)
-    allocate(u(n, p), source=0.0d0)
+    allocate(u(n, n), source=0.0d0)
 
     call dsvdc(xx, n, p, s, e, u, v, job, info)
-    call assert(info == 0, 'Singular value decomposition failed')
-    call assert(all(e < epsilon(1.0_real64)), 'Singular value decomposition failed')
+    call assert(info == 0, 'Singular value decomposition failed.')
+    call assert(all(e(1:n) < epsilon(1.0_real64)), 'Singular value decomposition failed')
 
   end subroutine
 
