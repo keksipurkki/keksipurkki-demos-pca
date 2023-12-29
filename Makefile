@@ -8,11 +8,13 @@ BITMAPS := $(patsubst flags/%.png, bitmaps/%.bmp, $(COUNTRY_FLAGS))
 all: $(PROG)
 	./svd bitmaps/*.bmp
 
+assets: $(BITMAPS)
+
 bitmaps:
-	mkdir bitmaps
+	mkdir -p bitmaps
 
 bitmaps/%.bmp: bitmaps
-	convert flags/$*.png -resize 5% $@
+	convert flags/$*.png -resize 128x85! -alpha opaque $@
 
 $(PROG): $(OBJS)
 	$(COMPILER) -o $@ $^

@@ -1,10 +1,11 @@
 module image_class
   use iso_fortran_env
+  use dispmodule
   implicit none
 
   type :: Image
     character(:), allocatable :: file_name
-    integer, allocatable :: bytes(:)
+    integer(int32), allocatable :: bytes(:)
   end type
 
   type :: ImageMatrix
@@ -13,37 +14,53 @@ module image_class
 
   contains
 
+    subroutine assert(ok, message)
+      logical, intent(in) :: ok
+      character(*), intent(in) :: message
+      if (ok) then
+        return
+      else
+        print *, message
+        stop 1
+      endif
+    end subroutine
+
+    !!
+    !! Output shape: x(number_of_bytes, data_points)
+    !!
     function matrix(self)
       class(ImageMatrix), intent(in) :: self
       real(real64), allocatable :: matrix(:,:)
       integer :: i, rows, cols
-      integer(int32) :: offset
 
       cols = size(self%images)
 
       do i = 1, size(self%images)
-        offset = transfer(self%images(i)%bytes(11:14), 1_int32) + 1
-        rows = max(rows, size(self%images(i)%bytes(offset:)))
+        rows = max(rows, size(self%images(i)%bytes))
       enddo
 
       allocate(matrix(rows, cols), source=0.0d0)
 
       do i = 1, size(self%images)
-        offset = transfer(self%images(i)%bytes(11:14), 1_int32) + 1
-        matrix(:,i) = 1.0d0 * self%images(i)%bytes(offset:)
+        matrix(:,i) = 1.0d0 * self%images(i)%bytes
       enddo
 
     end function
 
-    function input(arguments) result(x)
+    function input(arguments, grayscale) result(x)
       use, intrinsic :: iso_c_binding
-      real(real64), allocatable :: x(:,:)
+      real(real64), allocatable :: x(:,:), mean(:)
       character(len=*), intent(in) :: arguments(:)
+      logical, intent(in) :: grayscale
+      integer(int32), allocatable :: bytes(:)
+      integer(int32) :: offset, i, j, file_size
       type(Image) :: images(size(arguments))
       type(ImageMatrix) :: m
-
-      integer :: i, file_size
       character(c_char), allocatable :: buffer(:)
+
+      integer, allocatable, target :: rgba(:,:)
+      integer, pointer :: alpha(:), rgb(:,:)
+      logical :: mean_substraction = .true.
 
       do i = 1, size(arguments)
         inquire(file=arguments(i), size=file_size)
@@ -53,12 +70,40 @@ module image_class
         read(10) buffer
         close(10)
 
-        images(i) = image(file_name=arguments(i), bytes=ichar(buffer))
+        ! BMP image spec. Start of the bitmap array
+        offset = transfer(buffer(11:14), 1_int32) + 1
+        buffer = buffer(offset:)
+
+        if (grayscale) then
+          ! Sanity check
+          call assert(mod(size(buffer), 4) == 0, 'Array size mismatch')
+
+          rgba = reshape(ichar(buffer), [4, size(buffer)/4])
+          rgb => rgba(1:3,:)
+          alpha => rgba(4,:)
+
+          ! Sanity check
+          call assert(all(alpha == 255), 'Expected full opacity')
+          images(i) = image(file_name=arguments(i), bytes=sum(rgb, 1)/3)
+
+        else
+          images(i) = image(file_name=arguments(i), bytes=ichar(buffer))
+        end if
+
         deallocate(buffer)
       enddo
 
       m = ImageMatrix(images)
       x = matrix(m)
+
+      if (mean_substraction) then
+        mean = sum(x, 2) / size(x, 2)
+        call disp('Mean vector size: ', size(mean))
+
+        do i = 1, size(arguments)
+          x(:,i) = x(:,i) - mean
+        enddo
+      endif
 
     end function
 
@@ -70,46 +115,58 @@ program main
   use iso_fortran_env
   implicit none
 
-  real(real64), allocatable :: x(:,:), t(:,:)
-  real(real64), allocatable :: s(:), u(:,:), v(:,:)
   character(len=32), allocatable :: args(:)
-  integer :: i, j, axis, rank
-  integer, allocatable, target :: result(:,:)
-  integer, pointer :: r(:)
+  integer :: n, rank
 
   open(output_unit, encoding='utf-8')
 
-  rank = 30
   args = cli_arguments()
+  n = size(args)
+  rank = 5
 
-  if (size(args) == 0) then
+  if (n == 0) then
     call disp("Expected at least one argument")
     stop 0
   endif
 
-  call disp('Args: ', size(args))
+  call disp('Args: ', n)
   call disp('Rank: ', rank)
 
-  allocate(result(rank, size(args)), source=0)
+  call disp('-------------------------------------------------------------------')
 
-  x = input(args)
-  call dsvd(x, s, u, v)
-  call disp('Left singular vectors: ', shape(u))
+  call disp('RGB')
+  call output('rgb.txt', args, pca(input(args, grayscale=.false.), rank, n))
 
-  t = score(s, u, rank)
-
-  do i = 1, size(args)
-    axis = maxloc([( cosine(x(:,i), t(:,j)), j = 1, rank )], 1)
-    r => result(axis,:)
-    j = findloc(r, 0, 1)
-    r(j) = i
-  enddo
-
-  call pca(args, result)
+  !call disp('Grayscale')
+  !call output(args, pca(input(args, grayscale=.true.), rank, n))
 
 contains
 
-  function score(sigma, u, rank) result(t)
+  function pca(x, rank, data_points) result(result)
+
+    real(real64), allocatable, intent(in) :: x(:,:)
+    integer, intent(in) :: rank, data_points
+
+    real(real64), allocatable :: t(:,:)
+    real(real64), allocatable :: s(:), u(:,:), v(:,:)
+    integer, pointer :: r(:)
+    integer :: i, j, axis
+
+    real(real64), allocatable, target :: result(:,:)
+
+    allocate(result(data_points, rank), source=0d0)
+
+    call dsvd(x, s, u, v)
+    call disp('Left singular vectors: ', shape(u))
+    call disp('Singular values: ')
+    call disp(s)
+
+    t = pca_score(s, u, rank)
+    result = matmul(t, x)
+
+  end function
+
+  function pca_score(sigma, u, rank) result(t)
     integer, intent(in) :: rank
     real(real64), intent(in) :: u(:,:), sigma(:)
     real(real64), allocatable :: t(:,:)
@@ -117,42 +174,37 @@ contains
 
     call assert(rank <= size(sigma), 'Array shape mismatch')
 
-    allocate(t(size(u,1), rank), source=0.0d0)
+    allocate(t(rank, size(u,1)), source=0.0d0)
 
     do i = 1, rank
-      t(:,i) = sigma(i) * u(:,i)
+      t(i,:) = sigma(i) * u(:,i)
     enddo
 
   end function
 
-  subroutine pca(args, result)
+  subroutine output(fname, args, result)
+    character(len=*), intent(in) :: fname
     character(len=32), intent(in) :: args(:)
-    integer, intent(in), target :: result(:,:)
+    real(real64), intent(in), target :: result(:,:)
     integer :: rank, i, j
     integer, allocatable :: cluster(:)
-    integer, pointer :: r(:)
+    real(real64), pointer :: r(:)
 
-    rank = size(result, 1)
+    integer :: io
+
+    rank = size(result, 2)
     call assert(rank > 0, 'Expected a non-zero rank')
 
-    call disp('-------------------------------------------------------------------')
+    open(newunit=io, file=fname, status="replace", action="write", encoding='utf-8')
 
-    do i = 1, rank
+    do i = 1, size(args)
       r => result(i, :)
-      cluster = pack(r, r /= 0)
-
-      if (size(cluster) == 0) then
-        cycle
-      endif
-
-      do j = 1, size(cluster)
-        write (*, '(AA)', advance='no') country_emoji(country_code(args(cluster(j)))), " "
-      enddo
-
-      print *, ''
+      write (io, '(AA)', advance='no') country_emoji(country_code(args(i))), " ;"
+      write (io, '(*(G0,:";"))', advance='no') nint(r)
+      write (io, '(A)', advance='yes') ''
     enddo
 
-    call disp('-------------------------------------------------------------------')
+    close(io)
   end subroutine
 
   subroutine dsvd(x, s, u, v)
@@ -169,6 +221,9 @@ contains
     n = size(xx, 1)
     p = size(xx, 2)
 
+    call disp('SVD shape')
+    call disp('n: ', n)
+    call disp('p: ', p)
     call assert(n >= p, 'Expected a matrix with shape n >= p')
 
     job = 20
@@ -198,6 +253,7 @@ contains
     character(kind=ucs2, len=2) :: country_emoji
     integer, allocatable :: codepoints(:)
     integer, parameter :: offset = 127365
+    integer :: i
     codepoints = [( ichar(code(i:i)) + offset, i = 1, len(code) )]
     country_emoji = transfer(codepoints, country_emoji)
   end function
@@ -209,17 +265,6 @@ contains
     cosine = sum(a * b) / (norm2(a) * norm2(b))
   end function
 
-  subroutine assert(ok, message)
-    logical, intent(in) :: ok
-    character(*), intent(in) :: message
-    if (ok) then
-      return
-    else
-      print *, message
-      stop 1
-    endif
-  end subroutine
-
   function cli_arguments()
     integer :: i
     character (len=32) :: arg
@@ -229,6 +274,5 @@ contains
       cli_arguments(i) = trim(arg)
     end do
   end function
-
 
 end program
