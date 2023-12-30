@@ -1,115 +1,43 @@
+include 'assertions.f90'
+include 'utils.f90'
+
 module image_class
   use iso_fortran_env
-  use dispmodule
   implicit none
 
-  type :: Image
+  type :: image
     character(:), allocatable :: file_name
-    integer(int32), allocatable :: bytes(:)
+    integer(int32), allocatable :: bitmap(:,:)
   end type
 
-  type :: ImageMatrix
-    type(Image), allocatable :: images(:)
+  type :: image_matrix
+    type(image), allocatable :: images(:)
   end type
 
   contains
 
-    subroutine assert(ok, message)
-      logical, intent(in) :: ok
-      character(*), intent(in) :: message
-      if (ok) then
-        return
-      else
-        print *, message
-        stop 1
-      endif
-    end subroutine
-
     !!
     !! Output shape: x(samples, image_bytes)
+    !! Columns : rgb_1,rgb_2,rgb_3...
     !!
     function matrix(self)
-      class(ImageMatrix), intent(in) :: self
+      class(image_matrix), intent(in) :: self
       real(real64), allocatable :: matrix(:,:)
       integer :: i, rows, cols
+      integer(int32), allocatable :: bytes(:)
 
       rows = size(self%images)
 
       do i = 1, rows
-        cols = max(cols, size(self%images(i)%bytes))
+        cols = max(cols, size(self%images(i)%bitmap))
       enddo
 
       allocate(matrix(rows, cols), source=0.0d0)
 
       do i = 1, rows
-        matrix(i,:) = 1.0d0 * self%images(i)%bytes
+        bytes = reshape(self%images(i)%bitmap, [size(self%images(i)%bitmap)])
+        matrix(i,:) = 1.0d0 * bytes
       enddo
-
-    end function
-
-    function input(arguments, grayscale) result(x)
-      use, intrinsic :: iso_c_binding
-      real(real64), allocatable :: x(:,:)
-      character(len=*), intent(in) :: arguments(:)
-      logical, intent(in) :: grayscale
-      integer(int32), allocatable :: bytes(:)
-      integer(int32) :: offset, i, j, file_size
-      type(Image) :: images(size(arguments))
-      type(ImageMatrix) :: m
-      character(c_char), allocatable :: buffer(:)
-
-      integer, allocatable, target :: rgba(:,:)
-      integer, pointer :: alpha(:), rgb(:,:)
-
-      logical :: normalization = .true.
-      real(real64), allocatable :: mean(:), variance(:)
-
-      do i = 1, size(arguments)
-        inquire(file=arguments(i), size=file_size)
-        allocate(buffer(file_size))
-
-        open(10, file = arguments(i), access = 'stream', form = 'unformatted')
-        read(10) buffer
-        close(10)
-
-        ! BMP image spec. Start of the bitmap array
-        offset = transfer(buffer(11:14), 1_int32) + 1
-        buffer = buffer(offset:)
-
-        ! Sanity check
-        call assert(mod(size(buffer), 4) == 0, 'Array size mismatch')
-
-        rgba = reshape(ichar(buffer), [4, size(buffer)/4])
-        rgb => rgba(1:3,:)
-        alpha => rgba(4,:)
-
-        ! Sanity check
-        call assert(all(alpha == 255), 'Expected full opacity')
-
-        if (grayscale) then
-          images(i) = image(file_name=arguments(i), bytes=sum(rgb, 1)/3)
-        else
-          images(i) = image(file_name=arguments(i), bytes=reshape(rgb, [size(rgb)]))
-        end if
-
-        deallocate(buffer)
-      enddo
-
-      m = ImageMatrix(images)
-      x = matrix(m)
-
-      ! Column-wise zero mean and unit variance
-      if (normalization) then
-        mean = sum(x, 1) / size(x, 1)
-        variance = sum((x - spread(mean, 1, size(x, 1)))**2, 1) / size(x, 1)
-
-        call disp('Mean vector: ', shape(mean))
-        call disp('Variance vector: ', shape(variance))
-
-        do i = 1, size(arguments)
-          x(i,:) = (x(i,:) - mean) / variance
-        enddo
-      endif
 
     end function
 
@@ -119,11 +47,16 @@ program main
   use image_class
   use dispmodule
   use iso_fortran_env
+  use assertions
+  use utils
   implicit none
 
   character(len=32), allocatable :: args(:)
   integer :: n, rank
+  logical :: normalization = .true.
+  real(real64), allocatable :: x(:,:)
 
+  call disp_set(sep = ', ')
   open(output_unit, encoding='utf-8')
 
   args = cli_arguments()
@@ -141,38 +74,59 @@ program main
   call disp('-------------------------------------------------------------------')
 
   call disp('RGB')
-  call output('rgb.txt', args, pca(input(args, grayscale=.false.), rank))
+  x = normalize(input(args))
+  call output('rgb.txt', args, pca(x, rank))
+
+  call disp('-------------------------------------------------------------------')
 
   call disp('Grayscale')
-  call output('grayscale.txt', args, pca(input(args, grayscale=.true.), rank))
+  x = normalize(grayscale(input(args)))
+  call output('grayscale.txt', args, pca(x, rank))
 
 contains
 
-  function pca(x, rank) result(t)
+  function input(arguments) result(x)
+    use, intrinsic :: iso_c_binding
+    real(real64), allocatable :: x(:,:)
+    character(len=*), intent(in) :: arguments(:)
+    integer(int32), allocatable :: bytes(:)
+    integer(int32) :: offset, i, file_size
+    type(image) :: images(size(arguments))
+    type(image_matrix) :: m
+    character(c_char), allocatable :: buffer(:)
 
-    real(real64), allocatable, intent(in) :: x(:,:)
-    integer, intent(in) :: rank
+    integer, allocatable, target :: rgba(:,:)
+    integer, pointer :: alpha(:), rgb(:,:)
 
-    real(real64), allocatable :: t(:,:)
-    real(real64), allocatable :: s(:), u(:,:), v(:,:)
-    integer :: i
+    do i = 1, size(arguments)
+      inquire(file=arguments(i), size=file_size)
+      allocate(buffer(file_size))
 
-    call dsvd(x, s, u, v)
-    call disp('Left singular vectors: ', shape(u))
-    call disp('Singular values: ')
-    call disp(s)
+      open(10, file = arguments(i), access = 'stream', form = 'unformatted')
+      read(10) buffer
+      close(10)
 
-    allocate(t(size(u,1), size(u, 2)), source=0.0d0)
+      ! BMP image spec. Start of the bitmap array
+      offset = transfer(buffer(11:14), 1_int32) + 1
+      buffer = buffer(offset:)
 
-    do i = 1, size(t, 2)
-      t(:,i) = u(:,i) * s(i)
+      ! Sanity check
+      call assert(mod(size(buffer), 4) == 0, 'Array size mismatch')
+
+      rgba = reshape(ichar(buffer), [4, size(buffer)/4])
+      rgb => rgba(1:3,:)
+      alpha => rgba(4,:)
+
+      ! Sanity check
+      call assert(all(alpha == 255), 'Expected full opacity')
+
+      images(i) = image(file_name=arguments(i), bitmap=rgb)
+      deallocate(buffer)
     enddo
 
-    call disp('Result shape: ', shape(t))
+    m = image_matrix(images)
+    x = matrix(m)
 
-    t = t(:, 1:rank)
-
-    call disp('Truncated result shape: ', shape(t))
   end function
 
   subroutine output(fname, args, result)
@@ -195,6 +149,32 @@ contains
     close(io)
   end subroutine
 
+  function pca(x, rank) result(t)
+
+    real(real64), allocatable, intent(in) :: x(:,:)
+    integer, intent(in) :: rank
+
+    real(real64), allocatable :: t(:,:)
+    real(real64), allocatable :: s(:), u(:,:), v(:,:)
+    integer :: i
+
+    call dsvd(x, s, u, v)
+    call disp('Left singular vectors = ', shape(u), orient = 'row')
+    call disp('Sigma = ', reshape(s, [size(s)/10, 10], order=[2,1]))
+
+    allocate(t(size(u,1), size(u, 2)), source=0.0d0)
+
+    do i = 1, size(t, 2)
+      t(:,i) = u(:,i) * s(i)
+    enddo
+
+    call disp('Result shape = ', shape(t), orient='row')
+
+    t = t(:, 1:rank) ! Rank reduction
+
+    call disp('Truncated result shape = ', shape(t), orient='row')
+  end function
+
   subroutine dsvd(x, s, u, v)
     use svd, only: dsvdc
     real(real64), intent(in) :: x(:,:)
@@ -209,9 +189,7 @@ contains
     n = size(xx, 1)
     p = size(xx, 2)
 
-    call disp('SVD shape')
-    call disp('n: ', n)
-    call disp('p: ', p)
+    call disp('SVD shape = ', shape(xx), orient='row')
     call assert(n < p, 'Expected a matrix with shape n < p')
 
     job = 10
@@ -224,36 +202,5 @@ contains
     call assert(all(e(1:n) < epsilon(1.0_real64)), 'Singular value decomposition failed')
 
   end subroutine
-
-  function country_code(fname)
-    character(len=*), intent(in) :: fname
-    character(:), allocatable :: country_code
-    integer :: start, end
-    country_code = trim(fname)
-    start = scan(country_code, '/', back=.false.)
-    end = scan(country_code, '.', back=.true.)
-    country_code = country_code(start + 1:end - 1)
-  end function
-
-  function country_emoji(code)
-    character(len=2), intent(in) :: code
-    integer, parameter :: ucs2 = selected_char_kind('ISO_10646')
-    character(kind=ucs2, len=2) :: country_emoji
-    integer, allocatable :: codepoints(:)
-    integer, parameter :: offset = 127365
-    integer :: i
-    codepoints = [( ichar(code(i:i)) + offset, i = 1, len(code) )]
-    country_emoji = transfer(codepoints, country_emoji)
-  end function
-
-  function cli_arguments()
-    integer :: i
-    character (len=32) :: arg
-    character(len=32) :: cli_arguments(command_argument_count())
-    do i = 1, size(cli_arguments)
-      call get_command_argument(i, arg)
-      cli_arguments(i) = trim(arg)
-    end do
-  end function
 
 end program

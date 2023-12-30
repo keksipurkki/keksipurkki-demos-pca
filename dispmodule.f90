@@ -1255,7 +1255,7 @@ CONTAINS
     if (tosset % trimb == 'YES' .or. w == 0) sa = adjustl(sa)
     wtot = sum(len_trim(sa)) + (size(x) - 1)*(tosset % seplen)
   end function len_f_dint
-  
+
   function tostring_s_dint(x) result(st)
     ! Scalar to string
     integer(dint), intent(in)                   :: x
@@ -2059,7 +2059,7 @@ CONTAINS
       w = maxw_dble(x, d)
     endif
   end function widthmax_dble
-  
+
   pure function len_f_dble(x, fmt) result(wtot)
     ! Total length of returned string, vector s
     real(dble), intent(in)           :: x(:)
@@ -2078,7 +2078,7 @@ CONTAINS
     call trim_real(sa, gedit, w)
     wtot = sum(len_trim(sa)) + (size(x) - 1)*(tosset % seplen)
   end function len_f_dble
-  
+
   function tostring_s_dble(x) result(st)
     ! Scalar to string
     real(dble), intent(in) :: x
