@@ -49,7 +49,7 @@ module image_class
 
     function input(arguments, grayscale) result(x)
       use, intrinsic :: iso_c_binding
-      real(real64), allocatable :: x(:,:), mean(:)
+      real(real64), allocatable :: x(:,:)
       character(len=*), intent(in) :: arguments(:)
       logical, intent(in) :: grayscale
       integer(int32), allocatable :: bytes(:)
@@ -60,7 +60,9 @@ module image_class
 
       integer, allocatable, target :: rgba(:,:)
       integer, pointer :: alpha(:), rgb(:,:)
-      logical :: mean_substraction = .true.
+
+      logical :: normalization = .true.
+      real(real64), allocatable :: mean(:), variance(:)
 
       do i = 1, size(arguments)
         inquire(file=arguments(i), size=file_size)
@@ -96,13 +98,16 @@ module image_class
       m = ImageMatrix(images)
       x = matrix(m)
 
-      ! Column-wise zero mean
-      if (mean_substraction) then
+      ! Column-wise zero mean and unit variance
+      if (normalization) then
         mean = sum(x, 1) / size(x, 1)
-        call disp('Mean vector size: ', size(mean))
+        variance = sum((x - spread(mean, 1, size(x, 1)))**2, 1) / size(x, 1)
+
+        call disp('Mean vector: ', shape(mean))
+        call disp('Variance vector: ', shape(variance))
 
         do i = 1, size(arguments)
-          x(i,:) = x(i,:) - mean
+          x(i,:) = (x(i,:) - mean) / variance
         enddo
       endif
 
@@ -123,7 +128,7 @@ program main
 
   args = cli_arguments()
   n = size(args)
-  rank = 5
+  rank = 10
 
   if (n == 0) then
     call disp("Expected at least one argument")
@@ -136,69 +141,54 @@ program main
   call disp('-------------------------------------------------------------------')
 
   call disp('RGB')
-  call output('rgb.txt', args, pca(input(args, grayscale=.false.), n), rank)
+  call output('rgb.txt', args, pca(input(args, grayscale=.false.), rank))
 
   call disp('Grayscale')
-  call output('grayscale.txt', args, pca(input(args, grayscale=.true.), n), rank)
+  call output('grayscale.txt', args, pca(input(args, grayscale=.true.), rank))
 
 contains
 
-  function pca(x, data_points) result(result)
+  function pca(x, rank) result(t)
 
     real(real64), allocatable, intent(in) :: x(:,:)
-    integer, intent(in) :: data_points
+    integer, intent(in) :: rank
 
     real(real64), allocatable :: t(:,:)
     real(real64), allocatable :: s(:), u(:,:), v(:,:)
-    integer, pointer :: r(:)
-    integer :: i, j, axis
-
-    real(real64), allocatable, target :: result(:,:)
+    integer :: i
 
     call dsvd(x, s, u, v)
     call disp('Left singular vectors: ', shape(u))
     call disp('Singular values: ')
     call disp(s)
 
-    t = pca_score(s, u)
-    result = matmul(t, x)
-
-    call disp('Result shape: ', shape(result))
-
-  end function
-
-  function pca_score(sigma, u) result(t)
-    real(real64), intent(in) :: u(:,:), sigma(:)
-    real(real64), allocatable :: t(:,:)
-    integer :: i
-
     allocate(t(size(u,1), size(u, 2)), source=0.0d0)
 
-    do i = 1, rank
-      t(:,i) = u(:,i) * sigma(i)
+    do i = 1, size(t, 2)
+      t(:,i) = u(:,i) * s(i)
     enddo
 
+    call disp('Result shape: ', shape(t))
+
+    t = t(:, 1:rank)
+
+    call disp('Truncated result shape: ', shape(t))
   end function
 
-  subroutine output(fname, args, result, rank)
+  subroutine output(fname, args, result)
     character(len=*), intent(in) :: fname
     character(len=32), intent(in) :: args(:)
-    integer, intent(in) :: rank
     real(real64), intent(in), target :: result(:,:)
-    integer :: i, j
-    integer, allocatable :: cluster(:)
-    real(real64), pointer :: r(:)
+    integer :: i
 
     integer :: io
-
-    call assert(rank > 0, 'Expected a non-zero rank')
 
     open(newunit=io, file=fname, status="replace", action="write", encoding='utf-8')
 
     do i = 1, size(args)
       write (io, '(AA)', advance='no') country_code(args(i)), ";"
       write (io, '(AA)', advance='no') country_emoji(country_code(args(i))), " ;"
-      write (io, '(*(G0,:";"))', advance='no') nint(result(i, 1:rank))
+      write (io, '(*(G0.5,:";"))', advance='no') result(i, :)
       write (io, '(A)', advance='yes') ''
     enddo
 
@@ -254,13 +244,6 @@ contains
     integer :: i
     codepoints = [( ichar(code(i:i)) + offset, i = 1, len(code) )]
     country_emoji = transfer(codepoints, country_emoji)
-  end function
-
-  function cosine(a, b)
-    real(real64), intent(in) :: a(:), b(:)
-    real(real64) :: cosine
-    call assert(size(a) == size(b), 'Input rank mismatch')
-    cosine = sum(a * b) / (norm2(a) * norm2(b))
   end function
 
   function cli_arguments()
