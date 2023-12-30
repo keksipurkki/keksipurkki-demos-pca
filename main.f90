@@ -74,13 +74,13 @@ program main
   call disp('-------------------------------------------------------------------')
 
   call disp('RGB')
-  x = normalize(input(args))
+  x = 1.0d0*nint(normalize(input(args)))
   call output('rgb.txt', args, pca(x, rank))
 
   call disp('-------------------------------------------------------------------')
 
   call disp('Grayscale')
-  x = normalize(grayscale(input(args)))
+  x = 1.0d0*nint(normalize(grayscale(input(args))))
   call output('grayscale.txt', args, pca(x, rank))
 
 contains
