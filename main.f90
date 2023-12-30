@@ -27,6 +27,7 @@ module image_class
       integer(int32), allocatable :: bytes(:)
 
       rows = size(self%images)
+      cols = 0
 
       do i = 1, rows
         cols = max(cols, size(self%images(i)%bitmap))
@@ -35,7 +36,7 @@ module image_class
       allocate(matrix(rows, cols), source=0.0d0)
 
       do i = 1, rows
-        bytes = reshape(self%images(i)%bitmap, [size(self%images(i)%bitmap)])
+        bytes = reshape(self%images(i)%bitmap, [cols])
         matrix(i,:) = 1.0d0 * bytes
       enddo
 
@@ -53,15 +54,14 @@ program main
 
   character(len=32), allocatable :: args(:)
   integer :: n, rank
-  logical :: normalization = .true.
   real(real64), allocatable :: x(:,:)
 
-  call disp_set(sep = ', ')
+  call disp_set(sep = ', ', orient='row')
   open(output_unit, encoding='utf-8')
 
   args = cli_arguments()
   n = size(args)
-  rank = 10
+  rank = 5
 
   if (n == 0) then
     call disp("Expected at least one argument")
@@ -127,6 +127,8 @@ contains
     m = image_matrix(images)
     x = matrix(m)
 
+    call disp('Data shape = ', shape(x))
+
   end function
 
   subroutine output(fname, args, result)
@@ -142,7 +144,7 @@ contains
     do i = 1, size(args)
       write (io, '(AA)', advance='no') country_code(args(i)), ";"
       write (io, '(AA)', advance='no') country_emoji(country_code(args(i))), " ;"
-      write (io, '(*(G0.5,:";"))', advance='no') result(i, :)
+      write (io, '(*(G0.5,:";"))', advance='no') nint(result(i, :))
       write (io, '(A)', advance='yes') ''
     enddo
 
@@ -159,7 +161,7 @@ contains
     integer :: i
 
     call dsvd(x, s, u, v)
-    call disp('Left singular vectors = ', shape(u), orient = 'row')
+    call disp('Left singular vectors = ', shape(u))
     call disp('Sigma = ', reshape(s, [size(s)/10, 10], order=[2,1]))
 
     allocate(t(size(u,1), size(u, 2)), source=0.0d0)
@@ -168,11 +170,11 @@ contains
       t(:,i) = u(:,i) * s(i)
     enddo
 
-    call disp('Result shape = ', shape(t), orient='row')
+    call disp('Result shape = ', shape(t))
 
     t = t(:, 1:rank) ! Rank reduction
 
-    call disp('Truncated result shape = ', shape(t), orient='row')
+    call disp('Truncated result shape = ', shape(t))
   end function
 
   subroutine dsvd(x, s, u, v)
@@ -189,7 +191,7 @@ contains
     n = size(xx, 1)
     p = size(xx, 2)
 
-    call disp('SVD shape = ', shape(xx), orient='row')
+    call disp('SVD shape = ', shape(xx))
     call assert(n < p, 'Expected a matrix with shape n < p')
 
     job = 10
