@@ -144,7 +144,7 @@ contains
     do i = 1, size(args)
       write (io, '(AA)', advance='no') country_code(args(i)), ";"
       write (io, '(AA)', advance='no') country_emoji(country_code(args(i))), " ;"
-      write (io, '(*(G0.5,:";"))', advance='no') nint(result(i, :))
+      write (io, '(*(G0.5,:";"))', advance='no') 10d0*nint(0.1d0*result(i, :)) ! Coarse-grain features
       write (io, '(A)', advance='yes') ''
     enddo
 
